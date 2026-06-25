@@ -88,10 +88,13 @@ ORDER_STATUS_LABELS = {
 
 def get_db():
     if 'db' not in g:
-        if config.DATABASE_URL and config.DATABASE_URL.startswith('postgres'):
+        # BACA LANGSUNG DARI OS.ENVIRON UNTUK MENGHINDARI ERROR VARIABEL DI CONFIG
+        database_url = os.environ.get('DATABASE_URL', '')
+        
+        if database_url and database_url.startswith('postgres'):
             import psycopg2
             import psycopg2.extras
-            conn = psycopg2.connect(config.DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+            conn = psycopg2.connect(database_url, cursor_factory=psycopg2.extras.RealDictCursor)
             conn.autocommit = False
             g.db = conn
             g.db_type = 'postgres'
@@ -114,8 +117,9 @@ def close_db(exception=None):
 def init_db():
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     
-    # Cek jika menggunakan PostgreSQL (Supabase)
-    if config.DATABASE_URL and config.DATABASE_URL.startswith('postgres'):
+    database_url = os.environ.get('DATABASE_URL', '')
+    
+    if database_url and database_url.startswith('postgres'):
         db = get_db()
         cur = db.cursor()
         cur.execute("""
@@ -171,7 +175,6 @@ def init_db():
         """)
         db.commit()
     else:
-        # Jika menggunakan SQLite lokal
         db = sqlite3.connect(DB_PATH)
         db.executescript('''
             CREATE TABLE IF NOT EXISTS users (
@@ -226,7 +229,6 @@ def init_db():
         db.commit()
         db.close()
 
-    # Buat akun admin jika belum ada
     if config.ADMIN_USERNAME and config.ADMIN_PASSWORD:
         db = get_db()
         existing_admin = db.execute('SELECT id FROM users WHERE role = "admin"').fetchone()
@@ -238,7 +240,6 @@ def init_db():
             )
             db.commit()
 
-    # Seed produk awal (jika kosong)
     db = get_db()
     cur = db.execute('SELECT COUNT(*) FROM products')
     if cur.fetchone()[0] == 0:
