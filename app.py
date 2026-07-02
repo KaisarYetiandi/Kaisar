@@ -452,7 +452,7 @@ def set_security_headers(response):
     response.headers['Permissions-Policy'] = 'geolocation=(), microphone=(), camera=()'
     response.headers['Content-Security-Policy'] = (
         "default-src 'self'; "
-        "img-src 'self' data:; "
+        "img-src 'self' data: https://raw.githubusercontent.com; "
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
         "font-src https://fonts.gstatic.com; "
         "script-src 'self'; "
