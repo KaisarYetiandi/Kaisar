@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # KaisarShop — Platform Lisensi Software
 
 Tema hitam/ungu/putih. OTP via email. Admin URL tersembunyi. Bayar crypto. Redirect Telegram setelah disetujui.
@@ -121,3 +122,6 @@ Vercel filesystem bersifat read-only, jadi foto yang diupload admin tidak persis
 5. Halaman polling otomatis setiap 15 detik
 6. Admin buka `URL_ADMIN_ANDA/admin/pesanan` → klik **Approve**
 7. Halaman user **otomatis** berubah dan redirect ke `t.me/Darkness_Lock` dalam 2.5 detik
+=======
+# KaisarShop
+>>>>>>> d5022dba358b07128995af9cd2afb7cb76e47553
