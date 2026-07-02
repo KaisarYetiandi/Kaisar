@@ -424,12 +424,12 @@ def simpan_gambar_produk(file_storage):
                 file_options={"content-type": file_storage.mimetype}
             )
             if hasattr(res, 'error') and res.error:
-                flash(f'Gagal upload ke Supabase: {res.error}', 'error')
+                flash(f'Gagal upload ke Supabase: {res.error} (bucket={config.SUPABASE_BUCKET})', 'error')
                 return None
             public_url = supabase.storage.from_(config.SUPABASE_BUCKET).get_public_url(safe_name)
             return public_url
         except Exception as e:
-            flash(f'Exception saat upload ke Supabase: {str(e)}', 'error')
+            flash(f'Exception saat upload ke Supabase: {str(e)}. Periksa SUPABASE_BUCKET={config.SUPABASE_BUCKET}', 'error')
             return None
     else:
         if IS_VERCEL:
