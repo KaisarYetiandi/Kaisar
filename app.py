@@ -16,6 +16,59 @@ DB_PATH = os.path.join(config.BASE_DIR, 'kaisarshop.db')
 UPLOAD_DIR = os.path.join(config.BASE_DIR, 'static', 'uploads')
 ALLOWED_IMAGE_EXT = {'png', 'jpg', 'jpeg', 'webp'}
 MAX_IMAGE_SIZE = 4 * 1024 * 1024
+IS_VERCEL = os.environ.get('VERCEL') == '1'
+DB_INITIALIZED = False
+
+class DatabaseClient:
+    def __init__(self, connection, db_type):
+        self.conn = connection
+        self.db_type = db_type
+        self._cursor = None
+
+    def _format_query(self, query):
+        return query.replace('?', '%s') if self.db_type == 'postgres' else query
+
+    def execute(self, query, params=None):
+        query = self._format_query(query)
+        if self.db_type == 'postgres':
+            if self._cursor is None:
+                import psycopg2
+                import psycopg2.extras
+                self._cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            self._cursor.execute(query, params or ())
+            return self._cursor
+        return self.conn.execute(query, params or ())
+
+    def cursor(self):
+        if self.db_type == 'postgres':
+            import psycopg2
+            import psycopg2.extras
+            return self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        return self.conn.cursor()
+
+    def fetchone(self):
+        if self._cursor is not None:
+            return self._cursor.fetchone()
+        raise RuntimeError('No active cursor')
+
+    def fetchall(self):
+        if self._cursor is not None:
+            return self._cursor.fetchall()
+        raise RuntimeError('No active cursor')
+
+    def commit(self):
+        return self.conn.commit()
+
+    def rollback(self):
+        return self.conn.rollback()
+
+    def close(self):
+        try:
+            if self._cursor is not None:
+                self._cursor.close()
+        except Exception:
+            pass
+        self.conn.close()
 
 if config.SUPABASE_URL and config.SUPABASE_KEY:
     from supabase import create_client, Client
@@ -89,20 +142,24 @@ ORDER_STATUS_LABELS = {
 def get_db():
     if 'db' not in g:
         # BACA LANGSUNG DARI OS.ENVIRON (TIDAK LEWAT CONFIG)
-        database_url = os.environ.get('DATABASE_URL', '')
-        
-        if database_url and database_url.startswith('postgres'):
+        database_url = os.environ.get('DATABASE_URL', '').strip()
+
+        if database_url.startswith('postgres'):
             import psycopg2
-            import psycopg2.extras
-            conn = psycopg2.connect(database_url, cursor_factory=psycopg2.extras.RealDictCursor)
+            conn = psycopg2.connect(database_url)
             conn.autocommit = False
-            g.db = conn
+            g.db = DatabaseClient(conn, 'postgres')
             g.db_type = 'postgres'
+        elif database_url:
+            raise RuntimeError(f'Unsupported DATABASE_URL scheme: {database_url}')
         else:
+            if IS_VERCEL:
+                raise RuntimeError('Missing DATABASE_URL on Vercel. Vercel does not support SQLite persistence.')
+            os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
             conn = sqlite3.connect(DB_PATH)
             conn.row_factory = sqlite3.Row
             conn.execute('PRAGMA foreign_keys = ON')
-            g.db = conn
+            g.db = DatabaseClient(conn, 'sqlite')
             g.db_type = 'sqlite'
     return g.db
 
@@ -115,11 +172,15 @@ def close_db(exception=None):
         db.close()
 
 def init_db():
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
-    
-    database_url = os.environ.get('DATABASE_URL', '')
-    
-    if database_url and database_url.startswith('postgres'):
+    global DB_INITIALIZED
+    if DB_INITIALIZED:
+        return
+    if not IS_VERCEL:
+        os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+    database_url = os.environ.get('DATABASE_URL', '').strip()
+
+    if database_url.startswith('postgres'):
         db = get_db()
         cur = db.cursor()
         cur.execute("""
@@ -174,9 +235,11 @@ def init_db():
             );
         """)
         db.commit()
+        DB_INITIALIZED = True
     else:
-        db = sqlite3.connect(DB_PATH)
-        db.executescript('''
+        if not IS_VERCEL:
+            db = sqlite3.connect(DB_PATH)
+            db.executescript('''
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 full_name TEXT NOT NULL,
@@ -231,7 +294,7 @@ def init_db():
 
     if config.ADMIN_USERNAME and config.ADMIN_PASSWORD:
         db = get_db()
-        existing_admin = db.execute('SELECT id FROM users WHERE role = "admin"').fetchone()
+        existing_admin = db.execute('SELECT id FROM users WHERE role = \'admin\'').fetchone()
         if existing_admin is None:
             db.execute(
                 'INSERT INTO users (full_name, company, username, email, password_hash, role, email_verified, created_at) VALUES (?,?,?,?,?,?,?,?)',
@@ -252,9 +315,22 @@ def init_db():
             db.execute('INSERT INTO products (name, category, short_desc, full_desc, price_usd, image_filename, is_active, created_at) VALUES (?,?,?,?,?,?,?,?)', p)
         db.commit()
 
+with app.app_context():
+    init_db()
+
+
 def get_lang():
     lang = session.get('lang', 'id')
     return lang if lang in ('id', 'en') else 'id'
+
+
+def get_image_url(image_filename):
+    if not image_filename:
+        return None
+    if image_filename.startswith(('http://', 'https://')):
+        return image_filename
+    return url_for('static', filename='uploads/' + image_filename)
+
 
 def t(key):
     return TRANSLATIONS[get_lang()].get(key, key)
@@ -278,6 +354,7 @@ def inject_globals():
         'category_label': category_label,
         'status_label': status_label,
         'admin_login_path': config.ADMIN_LOGIN_PATH,
+        'product_image_url': get_image_url,
     }
 
 @app.route('/set-lang/<lang_code>')
@@ -346,6 +423,9 @@ def simpan_gambar_produk(file_storage):
             flash(f'Exception saat upload ke Supabase: {str(e)}', 'error')
             return None
     else:
+        if IS_VERCEL:
+            flash('Upload gambar tidak tersedia di Vercel tanpa Supabase. / Image upload not available on Vercel without Supabase.', 'error')
+            return None
         os.makedirs(UPLOAD_DIR, exist_ok=True)
         file_storage.seek(0)
         file_storage.save(os.path.join(UPLOAD_DIR, safe_name))
@@ -398,7 +478,7 @@ def product_detail(product_id):
         return redirect(url_for('index'))
     active_order = None
     if session.get('role') == 'pembeli':
-        active_order = db.execute('SELECT * FROM orders WHERE user_id = ? AND product_id = ? AND status != "ditolak" ORDER BY created_at DESC LIMIT 1', (session['user_id'], product_id)).fetchone()
+        active_order = db.execute('SELECT * FROM orders WHERE user_id = ? AND product_id = ? AND status != \'ditolak\' ORDER BY created_at DESC LIMIT 1', (session['user_id'], product_id)).fetchone()
     return render_template('product_detail.html', product=product, active_order=active_order, wallet_sol=config.WALLET_SOL, wallet_eth=config.WALLET_ETH)
 
 @app.route('/register', methods=['GET', 'POST'])
@@ -516,7 +596,7 @@ def login():
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '')
         db = get_db()
-        user = db.execute('SELECT * FROM users WHERE username = ? AND role = "pembeli"', (username,)).fetchone()
+        user = db.execute('SELECT * FROM users WHERE username = ? AND role = \'pembeli\'', (username,)).fetchone()
         if user is None or not check_password_hash(user['password_hash'], password):
             flash('Username atau kata sandi salah. / Incorrect username or password.', 'error')
             return redirect(url_for('login'))
@@ -543,7 +623,7 @@ def admin_login():
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '')
         db = get_db()
-        user = db.execute('SELECT * FROM users WHERE username = ? AND role = "admin"', (username,)).fetchone()
+        user = db.execute('SELECT * FROM users WHERE username = ? AND role = \'admin\'', (username,)).fetchone()
         if user is None or not check_password_hash(user['password_hash'], password):
             flash('Kredensial tidak valid.', 'error')
             return redirect(url_for('admin_login'))
@@ -563,13 +643,19 @@ def buy_product(product_id):
     if product is None:
         flash('Produk tidak ditemukan. / Product not found.', 'error')
         return redirect(url_for('index'))
-    existing = db.execute('SELECT id FROM orders WHERE user_id = ? AND product_id = ? AND status != "ditolak"', (session['user_id'], product_id)).fetchone()
+    existing = db.execute('SELECT id FROM orders WHERE user_id = ? AND product_id = ? AND status != \'ditolak\'', (session['user_id'], product_id)).fetchone()
     if existing:
         flash('Anda sudah memiliki pesanan aktif untuk produk ini. / You already have an active order for this product.', 'error')
         return redirect(url_for('order_detail', order_id=existing['id']))
-    db.execute('INSERT INTO orders (user_id, product_id, price_usd, status, created_at) VALUES (?,?,?,?,?)', (session['user_id'], product_id, product['price_usd'], 'menunggu_pembayaran', datetime.now().isoformat()))
-    db.commit()
-    order_id = db.execute('SELECT last_insert_rowid() AS id').fetchone()['id']
+    if g.db_type == 'postgres':
+        cursor = db.execute('INSERT INTO orders (user_id, product_id, price_usd, status, created_at) VALUES (%s,%s,%s,%s,%s) RETURNING id',
+                            (session['user_id'], product_id, product['price_usd'], 'menunggu_pembayaran', datetime.now().isoformat()))
+        order_id = cursor.fetchone()['id']
+    else:
+        db.execute('INSERT INTO orders (user_id, product_id, price_usd, status, created_at) VALUES (?,?,?,?,?)',
+                   (session['user_id'], product_id, product['price_usd'], 'menunggu_pembayaran', datetime.now().isoformat()))
+        db.commit()
+        order_id = db.execute('SELECT last_insert_rowid() AS id').fetchone()['id']
     return redirect(url_for('order_detail', order_id=order_id))
 
 @app.route('/pesanan/<int:order_id>')
@@ -602,7 +688,7 @@ def mark_paid(order_id):
         return redirect(url_for('order_detail', order_id=order_id))
     now = datetime.now()
     deadline = now + timedelta(hours=config.PAYMENT_REVIEW_HOURS)
-    db.execute('UPDATE orders SET status = "menunggu_konfirmasi", paid_marked_at = ?, review_deadline = ? WHERE id = ?', (now.isoformat(), deadline.isoformat(), order_id))
+    db.execute('UPDATE orders SET status = \'menunggu_konfirmasi\', paid_marked_at = ?, review_deadline = ? WHERE id = ?', (now.isoformat(), deadline.isoformat(), order_id))
     db.commit()
     flash('Konfirmasi pembayaran diterima. Admin akan meninjau dalam 24 jam. / Payment confirmation received. Admin will review within 24 hours.', 'success')
     return redirect(url_for('order_detail', order_id=order_id))
@@ -621,9 +707,9 @@ def admin_dashboard():
     db = get_db()
     total_produk = db.execute('SELECT COUNT(*) FROM products WHERE is_active = 1').fetchone()[0]
     total_pesanan = db.execute('SELECT COUNT(*) FROM orders').fetchone()[0]
-    menunggu = db.execute('SELECT COUNT(*) FROM orders WHERE status = "menunggu_konfirmasi"').fetchone()[0]
-    disetujui = db.execute('SELECT COUNT(*) FROM orders WHERE status = "disetujui"').fetchone()[0]
-    total_pembeli = db.execute('SELECT COUNT(*) FROM users WHERE role = "pembeli"').fetchone()[0]
+    menunggu = db.execute('SELECT COUNT(*) FROM orders WHERE status = \'menunggu_konfirmasi\'').fetchone()[0]
+    disetujui = db.execute('SELECT COUNT(*) FROM orders WHERE status = \'disetujui\'').fetchone()[0]
+    total_pembeli = db.execute('SELECT COUNT(*) FROM users WHERE role = \'pembeli\'').fetchone()[0]
     pesanan_terbaru = db.execute('SELECT orders.*, products.name AS product_name, users.full_name, users.email FROM orders JOIN products ON orders.product_id = products.id JOIN users ON orders.user_id = users.id ORDER BY orders.created_at DESC LIMIT 10').fetchall()
     return render_template('admin_dashboard.html', total_produk=total_produk, total_pesanan=total_pesanan, menunggu=menunggu, disetujui=disetujui, total_pembeli=total_pembeli, pesanan_terbaru=pesanan_terbaru)
 
@@ -742,7 +828,7 @@ def admin_decide_order(order_id):
 @admin_required
 def admin_buyers():
     db = get_db()
-    buyers = db.execute('SELECT users.*, (SELECT COUNT(*) FROM orders WHERE orders.user_id = users.id) AS total_pesanan, (SELECT COUNT(*) FROM orders WHERE orders.user_id = users.id AND status = "disetujui") AS total_disetujui FROM users WHERE role = "pembeli" ORDER BY full_name ASC').fetchall()
+    buyers = db.execute('SELECT users.*, (SELECT COUNT(*) FROM orders WHERE orders.user_id = users.id) AS total_pesanan, (SELECT COUNT(*) FROM orders WHERE orders.user_id = users.id AND status = \'disetujui\') AS total_disetujui FROM users WHERE role = \'pembeli\' ORDER BY full_name ASC').fetchall()
     return render_template('admin_buyers.html', buyers=buyers)
 
 @app.errorhandler(403)

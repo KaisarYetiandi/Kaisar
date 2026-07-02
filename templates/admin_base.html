@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="id">
+<html lang="{{ lang }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -10,8 +10,11 @@
 <body>
     <header class="topbar">
         <div class="topbar-inner">
-            <span class="brand"><img src="https://raw.githubusercontent.com/kaisardewakaisar-ui/Image/refs/heads/main/Kaisar-Photoroom.png" alt="KaisarShop" class="brand-logo"> KaisarShop <span style="color:var(--muted); font-size:0.75rem; font-weight:500;">/ Admin</span></span>
-            <nav class="nav">
+            <div class="admin-header-left">
+                <a href="{{ url_for('index') }}" class="brand"><img src="https://raw.githubusercontent.com/KaisarYetiandi/Image/refs/heads/main/IMG_20260703_005311_142.jpg" alt="KaisarShop" class="brand-logo"> KaisarShop</a>
+                <span class="admin-badge">Admin Portal</span>
+            </div>
+            <nav class="nav admin-nav">
                 <a href="{{ url_for('admin_dashboard') }}">Dashboard</a>
                 <a href="{{ url_for('admin_products') }}">Products</a>
                 <a href="{{ url_for('admin_orders') }}">Orders</a>
