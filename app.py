@@ -56,6 +56,15 @@ class DatabaseClient:
             return self._cursor.fetchall()
         raise RuntimeError('No active cursor')
 
+    def scalar(self, query, params=None):
+        cur = self.execute(query, params)
+        row = cur.fetchone()
+        if row is None:
+            return None
+        if isinstance(row, dict):
+            return next(iter(row.values()))
+        return row[0]
+
     def commit(self):
         return self.conn.commit()
 
@@ -304,8 +313,8 @@ def init_db():
             db.commit()
 
     db = get_db()
-    cur = db.execute('SELECT COUNT(*) FROM products')
-    if cur.fetchone()[0] == 0:
+    product_count = db.scalar('SELECT COUNT(*) FROM products') or 0
+    if product_count == 0:
         now = datetime.now().isoformat()
         products = [
             ('Venom Crypter FUD', 'crypter', 'Fully Undetectable crypter with advanced obfuscation and persistence.', 'A premium crypter designed to bypass all major antivirus detection including Windows Defender, Kaspersky, and Bitdefender. Features polymorphic code engine, process injection, startup persistence, and encrypted payload delivery. Supports .exe, .dll, .bat output formats. Silent execution with anti-sandbox and anti-VM detection built-in.', 499.0, None, 1, now),
@@ -705,11 +714,11 @@ def my_orders():
 @admin_required
 def admin_dashboard():
     db = get_db()
-    total_produk = db.execute('SELECT COUNT(*) FROM products WHERE is_active = 1').fetchone()[0]
-    total_pesanan = db.execute('SELECT COUNT(*) FROM orders').fetchone()[0]
-    menunggu = db.execute('SELECT COUNT(*) FROM orders WHERE status = \'menunggu_konfirmasi\'').fetchone()[0]
-    disetujui = db.execute('SELECT COUNT(*) FROM orders WHERE status = \'disetujui\'').fetchone()[0]
-    total_pembeli = db.execute('SELECT COUNT(*) FROM users WHERE role = \'pembeli\'').fetchone()[0]
+    total_produk = db.scalar('SELECT COUNT(*) FROM products WHERE is_active = 1') or 0
+    total_pesanan = db.scalar('SELECT COUNT(*) FROM orders') or 0
+    menunggu = db.scalar('SELECT COUNT(*) FROM orders WHERE status = \'menunggu_konfirmasi\'') or 0
+    disetujui = db.scalar('SELECT COUNT(*) FROM orders WHERE status = \'disetujui\'') or 0
+    total_pembeli = db.scalar('SELECT COUNT(*) FROM users WHERE role = \'pembeli\'') or 0
     pesanan_terbaru = db.execute('SELECT orders.*, products.name AS product_name, users.full_name, users.email FROM orders JOIN products ON orders.product_id = products.id JOIN users ON orders.user_id = users.id ORDER BY orders.created_at DESC LIMIT 10').fetchall()
     return render_template('admin_dashboard.html', total_produk=total_produk, total_pesanan=total_pesanan, menunggu=menunggu, disetujui=disetujui, total_pembeli=total_pembeli, pesanan_terbaru=pesanan_terbaru)
 
