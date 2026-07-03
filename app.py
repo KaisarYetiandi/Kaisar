@@ -111,7 +111,7 @@ TRANSLATIONS = {
         'nav_admin_products': 'Manage Tools', 'nav_admin_orders': 'Incoming Orders', 'nav_admin_buyers': 'Buyers List',
         'footer_text': 'KaisarShop@Hacking Tools Marketplace',
         'home_eyebrow': 'Welcome To', 'home_title': 'EmperorShop',
-        'home_desc': 'Browse our premium hacking tools collection.',
+        'home_desc': 'Browse our premium hacking tools collection',
         'search_placeholder': 'Search tools...', 'all_categories': 'All Categories', 'btn_search': 'Search',
         'no_products': 'No tools match your search.',
         'no_image': 'No image', 'price_label': 'Tools Price',
