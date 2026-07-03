@@ -616,7 +616,10 @@ def login():
         session['user_id'] = user['id']
         session['full_name'] = user['full_name']
         session['role'] = user['role']
-        flash(f'Selamat datang, {user["full_name"]}. / Welcome, {user["full_name"]}.', 'success')
+        if get_lang() == 'id':
+            flash(f'Selamat datang, {user["full_name"]}.', 'success')
+        else:
+            flash(f'Welcome, {user["full_name"]}.', 'success')
         return redirect(url_for('my_orders'))
     return render_template('login.html')
 
