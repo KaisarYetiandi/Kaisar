@@ -96,8 +96,8 @@ TRANSLATIONS = {
         'nav_catalog': 'Katalog Tools', 'nav_my_orders': 'Pesanan Saya', 'nav_login': 'Masuk',
         'nav_register': 'Daftar', 'nav_logout': 'Keluar', 'nav_admin_dashboard': 'Dasbor Admin',
         'nav_admin_products': 'Kelola Tools', 'nav_admin_orders': 'Pesanan Masuk', 'nav_admin_buyers': 'Daftar Pembeli',
-        'footer_text': 'KaisarShop@Platform Perdagangan Tools Hacking',
-        'home_eyebrow': 'Selamat Datang Di', 'home_title': 'KaisarShop',
+        'footer_text': 'KaisarShop — Platform Perdagangan Tools Hacking',
+        'home_eyebrow': 'Katalog Tools Hacking', 'home_title': 'Hacking Dunia',
         'home_desc': 'Jelajahi koleksi tools hacking premium',
         'search_placeholder': 'Cari tools...', 'all_categories': 'Semua Kategori', 'btn_search': 'Cari',
         'no_products': 'Tidak ada tools yang cocok dengan pencarian Anda.',
@@ -107,10 +107,10 @@ TRANSLATIONS = {
     },
     'en': {
         'nav_catalog': 'Tools Catalog', 'nav_my_orders': 'My Orders', 'nav_login': 'Sign In',
-        'nav_register': 'Register', 'nav_logout': 'Logout', 'nav_admin_dashboard': 'Admin Dashboard',
+        'nav_register': 'Register', 'nav_logout': 'Logout', 'nav_admin_dashboar': 'Admin Dashboard',
         'nav_admin_products': 'Manage Tools', 'nav_admin_orders': 'Incoming Orders', 'nav_admin_buyers': 'Buyers List',
         'footer_text': 'KaisarShop@Hacking Tools Marketplace',
-        'home_eyebrow': 'Welcome to', 'home_title': 'EmperorShop',
+        'home_eyebrow': 'Hacking Tools Catalog', 'home_title': 'Hacking The World',
         'home_desc': 'Browse our premium hacking tools collection.',
         'search_placeholder': 'Search tools...', 'all_categories': 'All Categories', 'btn_search': 'Search',
         'no_products': 'No tools match your search.',
@@ -668,6 +668,7 @@ def buy_product(product_id):
         cursor = db.execute('INSERT INTO orders (user_id, product_id, price_usd, status, created_at) VALUES (%s,%s,%s,%s,%s) RETURNING id',
                             (session['user_id'], product_id, product['price_usd'], 'menunggu_pembayaran', datetime.now().isoformat()))
         order_id = cursor.fetchone()['id']
+        db.commit()
     else:
         db.execute('INSERT INTO orders (user_id, product_id, price_usd, status, created_at) VALUES (?,?,?,?,?)',
                    (session['user_id'], product_id, product['price_usd'], 'menunggu_pembayaran', datetime.now().isoformat()))
