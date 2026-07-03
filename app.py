@@ -344,6 +344,11 @@ def get_image_url(image_filename):
 def t(key):
     return TRANSLATIONS[get_lang()].get(key, key)
 
+
+def flash_lang(id_text, en_text, category='success'):
+    flash(id_text if get_lang() == 'id' else en_text, category)
+
+
 def category_label(cat_key):
     return CATEGORY_LABELS[get_lang()].get(cat_key, cat_key)
 
@@ -677,7 +682,7 @@ def order_detail(order_id):
     db = get_db()
     order = db.execute('SELECT orders.*, products.name AS product_name, products.image_filename FROM orders JOIN products ON orders.product_id = products.id WHERE orders.id = ? AND orders.user_id = ?', (order_id, session['user_id'])).fetchone()
     if order is None:
-        flash('Pesanan tidak ditemukan. / Order not found.', 'error')
+        flash_lang('Pesanan tidak ditemukan.', 'Order not found.', 'error')
         return redirect(url_for('my_orders'))
     sisa_jam = None
     if order['status'] == 'menunggu_konfirmasi' and order['review_deadline']:
@@ -693,16 +698,16 @@ def mark_paid(order_id):
     db = get_db()
     order = db.execute('SELECT * FROM orders WHERE id = ? AND user_id = ?', (order_id, session['user_id'])).fetchone()
     if order is None:
-        flash('Pesanan tidak ditemukan. / Order not found.', 'error')
+        flash_lang('Pesanan tidak ditemukan.', 'Order not found.', 'error')
         return redirect(url_for('my_orders'))
     if order['status'] != 'menunggu_pembayaran':
-        flash('Pesanan ini sudah diproses sebelumnya. / This order has already been processed.', 'error')
+        flash_lang('Pesanan ini sudah diproses sebelumnya.', 'This order has already been processed.', 'error')
         return redirect(url_for('order_detail', order_id=order_id))
     now = datetime.now()
     deadline = now + timedelta(hours=config.PAYMENT_REVIEW_HOURS)
     db.execute('UPDATE orders SET status = \'menunggu_konfirmasi\', paid_marked_at = ?, review_deadline = ? WHERE id = ?', (now.isoformat(), deadline.isoformat(), order_id))
     db.commit()
-    flash('Konfirmasi pembayaran diterima. Admin akan meninjau dalam 24 jam. / Payment confirmation received. Admin will review within 24 hours.', 'success')
+    flash_lang('Konfirmasi pembayaran diterima. Admin akan meninjau dalam 24 jam.', 'Payment confirmation received. Admin will review within 24 hours.', 'success')
     return redirect(url_for('order_detail', order_id=order_id))
 
 @app.route('/pesanan-saya')
@@ -824,7 +829,7 @@ def admin_decide_order(order_id):
     db = get_db()
     order = db.execute('SELECT * FROM orders WHERE id = ?', (order_id,)).fetchone()
     if order is None:
-        flash('Pesanan tidak ditemukan. / Order not found.', 'error')
+        flash_lang('Pesanan tidak ditemukan.', 'Order not found.', 'error')
         return redirect(url_for('admin_orders'))
     decision = request.form.get('decision', '')
     admin_note = request.form.get('admin_note', '').strip()
@@ -833,7 +838,7 @@ def admin_decide_order(order_id):
         return redirect(url_for('admin_orders'))
     db.execute('UPDATE orders SET status = ?, admin_note = ?, decided_at = ? WHERE id = ?', (decision, admin_note, datetime.now().isoformat(), order_id))
     db.commit()
-    flash(f'Pesanan telah ditandai sebagai "{decision}". / Order marked as "{decision}".', 'success')
+    flash_lang(f'Pesanan telah ditandai sebagai "{decision}".', f'Order marked as "{decision}".', 'success')
     return redirect(url_for('admin_orders'))
 
 @app.route('/admin/pembeli')
