@@ -96,7 +96,7 @@ TRANSLATIONS = {
         'nav_catalog': 'Katalog Tools', 'nav_my_orders': 'Pesanan Saya', 'nav_login': 'Masuk',
         'nav_register': 'Daftar', 'nav_logout': 'Keluar', 'nav_admin_dashboard': 'Dasbor Admin',
         'nav_admin_products': 'Kelola Tools', 'nav_admin_orders': 'Pesanan Masuk', 'nav_admin_buyers': 'Daftar Pembeli',
-        'footer_text': 'KaisarShop — Platform Perdagangan Tools Hacking',
+        'footer_text': 'KaisarShop@Platform Perdagangan Tools Hacking',
         'home_eyebrow': 'Katalog Tools Hacking', 'home_title': 'Hacking Dunia',
         'home_desc': 'Jelajahi koleksi tools hacking premium',
         'search_placeholder': 'Cari tools...', 'all_categories': 'Semua Kategori', 'btn_search': 'Cari',
