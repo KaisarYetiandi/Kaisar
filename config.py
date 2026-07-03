@@ -36,7 +36,8 @@ OTP_MAX_ATTEMPTS = 5
 PAYMENT_REVIEW_HOURS = 24
 
 SUPABASE_URL = env('SUPABASE_URL', '').strip()
-SUPABASE_KEY = env('SUPABASE_KEY', '').strip()
+SUPABASE_KEY = env('SUPABASE_KEY', '').strip() or env('SUPABASE_SERVICE_ROLE_KEY', '').strip()
+SUPABASE_SERVICE_ROLE_KEY = env('SUPABASE_SERVICE_ROLE_KEY', '').strip()
 SUPABASE_BUCKET = env('SUPABASE_BUCKET', 'product-images').strip()
 
 CATEGORY_KEYS = ['Ransomware','crypter', 'malware', 'exploiter', 'crackedsoftware', 'osint', 'other']
