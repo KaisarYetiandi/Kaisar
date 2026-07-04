@@ -1,0 +1,49 @@
+{% extends "admin_base.html" %}
+{% block title %}Reviews{% endblock %}
+{% block content %}
+<div class="page-head">
+    <p class="eyebrow">Reviews</p>
+    <h1>Product Reviews</h1>
+    <p>Monitor buyer feedback and remove inappropriate reviews when needed.</p>
+</div>
+
+<div class="stat-grid">
+    <div class="stat-card"><div class="num">{{ total_reviews }}</div><div class="label">Total Reviews</div></div>
+    <div class="stat-card"><div class="num">{{ '%.1f'|format(avg_rating) }}</div><div class="label">Average Rating</div></div>
+</div>
+
+{% if reviews|length == 0 %}
+    <div class="empty-state">No reviews yet.</div>
+{% else %}
+    <div class="table-wrap">
+        <table class="data">
+            <thead>
+                <tr>
+                    <th>Buyer</th>
+                    <th>Product</th>
+                    <th>Rating</th>
+                    <th>Comment</th>
+                    <th>Date</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for review in reviews %}
+                <tr>
+                    <td>{{ review['full_name'] }}<br><span class="help-text">{{ review['email'] }}</span></td>
+                    <td>{{ review['product_name'] }}</td>
+                    <td>{% for i in range(1, 6) %}{% if i <= review['rating'] %}★{% else %}☆{% endif %}{% endfor %}</td>
+                    <td>{{ review['comment'] }}</td>
+                    <td>{{ review['created_at'][:10] }}</td>
+                    <td>
+                        <form method="post" action="{{ url_for('admin_delete_review', review_id=review['id']) }}" class="inline">
+                            <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+{% endif %}
+{% endblock %}
