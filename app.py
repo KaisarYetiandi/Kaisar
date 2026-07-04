@@ -431,11 +431,38 @@ def status_label(status_key):
 def build_rating_summary(reviews):
     if not reviews:
         return {'average': 0.0, 'count': 0, 'stars': 0}
-    ratings = [int(review.get('rating', 0)) for review in reviews if review.get('rating') is not None]
+
+    ratings = []
+    for review in reviews:
+        rating_value = None
+        try:
+            if hasattr(review, 'get'):
+                rating_value = review.get('rating')
+            else:
+                rating_value = review['rating']
+        except Exception:
+            rating_value = None
+        if rating_value is not None:
+            try:
+                ratings.append(int(rating_value))
+            except (TypeError, ValueError):
+                continue
+
     if not ratings:
         return {'average': 0.0, 'count': len(reviews), 'stars': 0}
     average = round(sum(ratings) / len(ratings), 1)
     return {'average': average, 'count': len(reviews), 'stars': max(0, min(5, int(round(average))))}
+
+
+def format_date_label(value, lang='id'):
+    if not value:
+        return '-'
+    try:
+        dt = datetime.fromisoformat(value)
+    except Exception:
+        return value[:10]
+    months = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'] if lang == 'id' else ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+    return f"{dt.day} {months[dt.month - 1]} {dt.year}"
 
 
 @app.context_processor
@@ -452,6 +479,7 @@ def inject_globals():
         'status_label': status_label,
         'admin_login_path': config.ADMIN_LOGIN_PATH,
         'product_image_url': get_image_url,
+        'format_date_label': format_date_label,
     }
 
 @app.route('/set-lang/<lang_code>')
