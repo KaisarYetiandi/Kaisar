@@ -148,9 +148,17 @@ ORDER_STATUS_LABELS = {
            'disetujui': 'Approved', 'ditolak': 'Rejected'}
 }
 
+def normalize_database_url(database_url):
+    database_url = database_url.strip()
+    if database_url.startswith('postgres') and 'sslmode=' not in database_url and 'ssl=true' not in database_url.lower():
+        separator = '&' if '?' in database_url else '?'
+        return f'{database_url}{separator}sslmode=require'
+    return database_url
+
+
 def get_db():
     if 'db' not in g:
-        database_url = os.environ.get('DATABASE_URL', '').strip()
+        database_url = normalize_database_url(os.environ.get('DATABASE_URL', '').strip())
 
         if database_url.startswith('postgres'):
             try:
@@ -196,75 +204,83 @@ def init_db():
     if not IS_VERCEL:
         os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-    database_url = os.environ.get('DATABASE_URL', '').strip()
+    database_url = normalize_database_url(os.environ.get('DATABASE_URL', '').strip())
 
     if database_url.startswith('postgres'):
-        db = get_db()
-        cur = db.cursor()
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                id SERIAL PRIMARY KEY,
-                full_name TEXT NOT NULL,
-                company TEXT,
-                username TEXT UNIQUE NOT NULL,
-                email TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                role TEXT NOT NULL DEFAULT 'pembeli',
-                email_verified INTEGER NOT NULL DEFAULT 0,
-                is_banned INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL
-            );
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS email_otp (
-                id SERIAL PRIMARY KEY,
-                email TEXT NOT NULL,
-                otp_code TEXT NOT NULL,
-                pending_user_data TEXT NOT NULL,
-                attempts INTEGER NOT NULL DEFAULT 0,
-                expires_at TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            );
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS products (
-                id SERIAL PRIMARY KEY,
-                name TEXT NOT NULL,
-                category TEXT NOT NULL,
-                short_desc TEXT NOT NULL,
-                full_desc TEXT NOT NULL,
-                price_usd REAL NOT NULL,
-                image_filename TEXT,
-                is_active INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL
-            );
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS orders (
-                id SERIAL PRIMARY KEY,
-                user_id INTEGER NOT NULL REFERENCES users(id),
-                product_id INTEGER NOT NULL REFERENCES products(id),
-                price_usd REAL NOT NULL,
-                status TEXT NOT NULL DEFAULT 'menunggu_pembayaran',
-                paid_marked_at TEXT,
-                review_deadline TEXT,
-                decided_at TEXT,
-                admin_note TEXT,
-                created_at TEXT NOT NULL
-            );
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS product_reviews (
-                id SERIAL PRIMARY KEY,
-                product_id INTEGER NOT NULL REFERENCES products(id),
-                user_id INTEGER NOT NULL REFERENCES users(id),
-                rating INTEGER NOT NULL,
-                comment TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            );
-        """)
-        db.commit()
-        DB_INITIALIZED = True
+        try:
+            db = get_db()
+            cur = db.cursor()
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    full_name TEXT NOT NULL,
+                    company TEXT,
+                    username TEXT UNIQUE NOT NULL,
+                    email TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'pembeli',
+                    email_verified INTEGER NOT NULL DEFAULT 0,
+                    is_banned INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL
+                );
+            """)
+            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_banned INTEGER NOT NULL DEFAULT 0")
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS email_otp (
+                    id SERIAL PRIMARY KEY,
+                    email TEXT NOT NULL,
+                    otp_code TEXT NOT NULL,
+                    pending_user_data TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    expires_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS products (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    short_desc TEXT NOT NULL,
+                    full_desc TEXT NOT NULL,
+                    price_usd REAL NOT NULL,
+                    image_filename TEXT,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL
+                );
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS orders (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id),
+                    product_id INTEGER NOT NULL REFERENCES products(id),
+                    price_usd REAL NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'menunggu_pembayaran',
+                    paid_marked_at TEXT,
+                    review_deadline TEXT,
+                    decided_at TEXT,
+                    admin_note TEXT,
+                    created_at TEXT NOT NULL
+                );
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS product_reviews (
+                    id SERIAL PRIMARY KEY,
+                    product_id INTEGER NOT NULL REFERENCES products(id),
+                    user_id INTEGER NOT NULL REFERENCES users(id),
+                    rating INTEGER NOT NULL,
+                    comment TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+            """)
+            db.commit()
+            DB_INITIALIZED = True
+        except Exception as exc:
+            app.logger.exception('Database initialization failed during startup: %s', exc)
+            if not IS_VERCEL:
+                raise
+            DB_INITIALIZED = True
+            return
     else:
         if not IS_VERCEL:
             db = sqlite3.connect(DB_PATH)
@@ -332,6 +348,30 @@ def init_db():
         ''')
         db.commit()
         db.close()
+
+    if not IS_VERCEL:
+        db = sqlite3.connect(DB_PATH)
+        try:
+            columns = [row[1] for row in db.execute('PRAGMA table_info(users)').fetchall()]
+            if 'is_banned' not in columns:
+                db.execute('ALTER TABLE users ADD COLUMN is_banned INTEGER NOT NULL DEFAULT 0')
+            review_table = db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='product_reviews'").fetchone()
+            if review_table is None:
+                db.execute('''
+                    CREATE TABLE product_reviews (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        product_id INTEGER NOT NULL,
+                        user_id INTEGER NOT NULL,
+                        rating INTEGER NOT NULL,
+                        comment TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        FOREIGN KEY (product_id) REFERENCES products (id),
+                        FOREIGN KEY (user_id) REFERENCES users (id)
+                    )
+                ''')
+            db.commit()
+        finally:
+            db.close()
 
     if config.ADMIN_USERNAME and config.ADMIN_PASSWORD:
         db = get_db()
@@ -694,26 +734,31 @@ def login():
     if request.method == 'POST':
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '')
-        db = get_db()
-        user = db.execute('SELECT * FROM users WHERE username = ? AND role = \'pembeli\'', (username,)).fetchone()
-        if user is None or not check_password_hash(user['password_hash'], password):
-            flash('Username atau kata sandi salah. / Incorrect username or password.', 'error')
+        try:
+            db = get_db()
+            user = db.execute('SELECT * FROM users WHERE username = ? AND role = \'pembeli\'', (username,)).fetchone()
+            if user is None or not check_password_hash(user['password_hash'], password):
+                flash('Username atau kata sandi salah. / Incorrect username or password.', 'error')
+                return redirect(url_for('login'))
+            if user.get('is_banned', 0):
+                flash('Akun Anda telah diban permanen. / Your account has been permanently banned.', 'error')
+                return redirect(url_for('login'))
+            if not user['email_verified']:
+                flash('Email belum diverifikasi. / Email not verified yet.', 'error')
+                return redirect(url_for('login'))
+            session.clear()
+            session['user_id'] = user['id']
+            session['full_name'] = user['full_name']
+            session['role'] = user['role']
+            if get_lang() == 'id':
+                flash(f'Selamat datang, {user["full_name"]}.', 'success')
+            else:
+                flash(f'Welcome, {user["full_name"]}.', 'success')
+            return redirect(url_for('my_orders'))
+        except Exception as exc:
+            app.logger.exception('Login failed: %s', exc)
+            flash('Terjadi gangguan saat login. Silakan coba beberapa saat lagi.', 'error')
             return redirect(url_for('login'))
-        if user['is_banned']:
-            flash('Akun Anda telah diban permanen. / Your account has been permanently banned.', 'error')
-            return redirect(url_for('login'))
-        if not user['email_verified']:
-            flash('Email belum diverifikasi. / Email not verified yet.', 'error')
-            return redirect(url_for('login'))
-        session.clear()
-        session['user_id'] = user['id']
-        session['full_name'] = user['full_name']
-        session['role'] = user['role']
-        if get_lang() == 'id':
-            flash(f'Selamat datang, {user["full_name"]}.', 'success')
-        else:
-            flash(f'Welcome, {user["full_name"]}.', 'success')
-        return redirect(url_for('my_orders'))
     return render_template('login.html')
 
 @app.route('/logout')
@@ -727,16 +772,21 @@ def admin_login():
     if request.method == 'POST':
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '')
-        db = get_db()
-        user = db.execute('SELECT * FROM users WHERE username = ? AND role = \'admin\'', (username,)).fetchone()
-        if user is None or not check_password_hash(user['password_hash'], password):
-            flash('Kredensial tidak valid.', 'error')
+        try:
+            db = get_db()
+            user = db.execute('SELECT * FROM users WHERE username = ? AND role = \'admin\'', (username,)).fetchone()
+            if user is None or not check_password_hash(user['password_hash'], password):
+                flash('Kredensial tidak valid.', 'error')
+                return redirect(url_for('admin_login'))
+            session.clear()
+            session['user_id'] = user['id']
+            session['full_name'] = user['full_name']
+            session['role'] = user['role']
+            return redirect(url_for('admin_dashboard'))
+        except Exception as exc:
+            app.logger.exception('Admin login failed: %s', exc)
+            flash('Terjadi gangguan saat login admin.', 'error')
             return redirect(url_for('admin_login'))
-        session.clear()
-        session['user_id'] = user['id']
-        session['full_name'] = user['full_name']
-        session['role'] = user['role']
-        return redirect(url_for('admin_dashboard'))
     return render_template('admin_login.html')
 
 @app.route('/produk/<int:product_id>/beli', methods=['POST'])
