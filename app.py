@@ -150,15 +150,24 @@ ORDER_STATUS_LABELS = {
 
 def get_db():
     if 'db' not in g:
-        # BACA LANGSUNG DARI OS.ENVIRON (TIDAK LEWAT CONFIG)
         database_url = os.environ.get('DATABASE_URL', '').strip()
 
         if database_url.startswith('postgres'):
-            import psycopg2
-            conn = psycopg2.connect(database_url)
-            conn.autocommit = False
-            g.db = DatabaseClient(conn, 'postgres')
-            g.db_type = 'postgres'
+            try:
+                import psycopg2
+                conn = psycopg2.connect(database_url)
+                conn.autocommit = False
+                g.db = DatabaseClient(conn, 'postgres')
+                g.db_type = 'postgres'
+            except Exception:
+                if IS_VERCEL:
+                    raise
+                os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+                conn = sqlite3.connect(DB_PATH)
+                conn.row_factory = sqlite3.Row
+                conn.execute('PRAGMA foreign_keys = ON')
+                g.db = DatabaseClient(conn, 'sqlite')
+                g.db_type = 'sqlite'
         elif database_url:
             raise RuntimeError(f'Unsupported DATABASE_URL scheme: {database_url}')
         else:
@@ -202,6 +211,7 @@ def init_db():
                 password_hash TEXT NOT NULL,
                 role TEXT NOT NULL DEFAULT 'pembeli',
                 email_verified INTEGER NOT NULL DEFAULT 0,
+                is_banned INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             );
         """)
@@ -243,6 +253,16 @@ def init_db():
                 created_at TEXT NOT NULL
             );
         """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS product_reviews (
+                id SERIAL PRIMARY KEY,
+                product_id INTEGER NOT NULL REFERENCES products(id),
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                rating INTEGER NOT NULL,
+                comment TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+        """)
         db.commit()
         DB_INITIALIZED = True
     else:
@@ -258,6 +278,7 @@ def init_db():
                 password_hash TEXT NOT NULL,
                 role TEXT NOT NULL DEFAULT 'pembeli',
                 email_verified INTEGER NOT NULL DEFAULT 0,
+                is_banned INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             );
 
@@ -296,6 +317,17 @@ def init_db():
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (user_id) REFERENCES users (id),
                 FOREIGN KEY (product_id) REFERENCES products (id)
+            );
+
+            CREATE TABLE IF NOT EXISTS product_reviews (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                rating INTEGER NOT NULL,
+                comment TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (product_id) REFERENCES products (id),
+                FOREIGN KEY (user_id) REFERENCES users (id)
             );
         ''')
         db.commit()
@@ -354,6 +386,17 @@ def category_label(cat_key):
 
 def status_label(status_key):
     return ORDER_STATUS_LABELS[get_lang()].get(status_key, status_key)
+
+
+def build_rating_summary(reviews):
+    if not reviews:
+        return {'average': 0.0, 'count': 0, 'stars': 0}
+    ratings = [int(review.get('rating', 0)) for review in reviews if review.get('rating') is not None]
+    if not ratings:
+        return {'average': 0.0, 'count': len(reviews), 'stars': 0}
+    average = round(sum(ratings) / len(ratings), 1)
+    return {'average': average, 'count': len(reviews), 'stars': max(0, min(5, int(round(average))))}
+
 
 @app.context_processor
 def inject_globals():
@@ -471,15 +514,21 @@ def index():
     db = get_db()
     q = request.args.get('q', '').strip()
     category = request.args.get('category', '').strip()
-    query = 'SELECT * FROM products WHERE is_active = 1'
+    query = '''
+        SELECT p.*, 
+               COALESCE((SELECT ROUND(AVG(pr.rating), 1) FROM product_reviews pr WHERE pr.product_id = p.id), 0) AS avg_rating,
+               (SELECT COUNT(*) FROM product_reviews pr WHERE pr.product_id = p.id) AS review_count
+        FROM products p
+        WHERE p.is_active = 1
+    '''
     params = []
     if q:
-        query += ' AND (name LIKE ? OR short_desc LIKE ?)'
+        query += ' AND (p.name LIKE ? OR p.short_desc LIKE ?)'
         params.extend([f'%{q}%', f'%{q}%'])
     if category:
-        query += ' AND category = ?'
+        query += ' AND p.category = ?'
         params.append(category)
-    query += ' ORDER BY created_at DESC'
+    query += ' ORDER BY p.created_at DESC'
     products = db.execute(query, params).fetchall()
     return render_template('index.html', products=products, categories=config.CATEGORY_KEYS, q=q, selected_category=category)
 
@@ -493,7 +542,43 @@ def product_detail(product_id):
     active_order = None
     if session.get('role') == 'pembeli':
         active_order = db.execute('SELECT * FROM orders WHERE user_id = ? AND product_id = ? AND status != \'ditolak\' ORDER BY created_at DESC LIMIT 1', (session['user_id'], product_id)).fetchone()
-    return render_template('product_detail.html', product=product, active_order=active_order, wallet_sol=config.WALLET_SOL, wallet_eth=config.WALLET_ETH)
+    reviews = db.execute('SELECT product_reviews.*, users.full_name FROM product_reviews JOIN users ON product_reviews.user_id = users.id WHERE product_reviews.product_id = ? ORDER BY product_reviews.created_at DESC', (product_id,)).fetchall()
+    review_summary = build_rating_summary(reviews)
+    user_review = None
+    if session.get('user_id') is not None:
+        user_review = db.execute('SELECT id FROM product_reviews WHERE product_id = ? AND user_id = ?', (product_id, session['user_id'])).fetchone()
+    return render_template('product_detail.html', product=product, active_order=active_order, reviews=reviews, review_summary=review_summary, user_review=user_review, wallet_sol=config.WALLET_SOL, wallet_eth=config.WALLET_ETH)
+
+@app.route('/produk/<int:product_id>/ulas', methods=['POST'])
+@login_required
+@buyer_required
+def submit_review(product_id):
+    db = get_db()
+    product = db.execute('SELECT id FROM products WHERE id = ? AND is_active = 1', (product_id,)).fetchone()
+    if product is None:
+        flash('Produk tidak ditemukan. / Product not found.', 'error')
+        return redirect(url_for('index'))
+
+    try:
+        rating = int(request.form.get('rating', '0'))
+    except (TypeError, ValueError):
+        rating = 0
+
+    comment = request.form.get('comment', '').strip()
+    if not 1 <= rating <= 5:
+        flash('Pilih rating 1 sampai 5. / Please choose a rating from 1 to 5.', 'error')
+    elif len(comment) < 5:
+        flash('Komentar minimal 5 karakter. / Comment must be at least 5 characters.', 'error')
+    else:
+        existing = db.execute('SELECT id FROM product_reviews WHERE product_id = ? AND user_id = ?', (product_id, session['user_id'])).fetchone()
+        if existing:
+            flash('Anda sudah memberi ulasan untuk produk ini. / You already reviewed this product.', 'error')
+        else:
+            db.execute('INSERT INTO product_reviews (product_id, user_id, rating, comment, created_at) VALUES (?,?,?,?,?)',
+                       (product_id, session['user_id'], rating, comment, datetime.now().isoformat()))
+            db.commit()
+            flash('Ulasan berhasil dikirim. / Review submitted successfully.', 'success')
+    return redirect(url_for('product_detail', product_id=product_id))
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
@@ -613,6 +698,9 @@ def login():
         user = db.execute('SELECT * FROM users WHERE username = ? AND role = \'pembeli\'', (username,)).fetchone()
         if user is None or not check_password_hash(user['password_hash'], password):
             flash('Username atau kata sandi salah. / Incorrect username or password.', 'error')
+            return redirect(url_for('login'))
+        if user['is_banned']:
+            flash('Akun Anda telah diban permanen. / Your account has been permanently banned.', 'error')
             return redirect(url_for('login'))
         if not user['email_verified']:
             flash('Email belum diverifikasi. / Email not verified yet.', 'error')
@@ -842,12 +930,66 @@ def admin_decide_order(order_id):
     flash_lang(f'Pesanan telah ditandai sebagai "{decision}".', f'Order marked as "{decision}".', 'success')
     return redirect(url_for('admin_orders'))
 
+@app.route('/admin/ulasan')
+@admin_required
+def admin_reviews():
+    db = get_db()
+    reviews = db.execute('''
+        SELECT pr.*, p.name AS product_name, u.full_name, u.email
+        FROM product_reviews pr
+        JOIN products p ON pr.product_id = p.id
+        JOIN users u ON pr.user_id = u.id
+        ORDER BY pr.created_at DESC
+    ''').fetchall()
+    total_reviews = len(reviews)
+    avg_rating = round(sum(review['rating'] for review in reviews) / total_reviews, 1) if total_reviews else 0.0
+    return render_template('admin_reviews.html', reviews=reviews, total_reviews=total_reviews, avg_rating=avg_rating)
+
+@app.route('/admin/ulasan/<int:review_id>/hapus', methods=['POST'])
+@admin_required
+def admin_delete_review(review_id):
+    db = get_db()
+    review = db.execute('SELECT id FROM product_reviews WHERE id = ?', (review_id,)).fetchone()
+    if review is None:
+        flash('Ulasan tidak ditemukan. / Review not found.', 'error')
+    else:
+        db.execute('DELETE FROM product_reviews WHERE id = ?', (review_id,))
+        db.commit()
+        flash('Ulasan berhasil dihapus. / Review deleted successfully.', 'success')
+    return redirect(url_for('admin_reviews'))
+
 @app.route('/admin/pembeli')
 @admin_required
 def admin_buyers():
     db = get_db()
     buyers = db.execute('SELECT users.*, (SELECT COUNT(*) FROM orders WHERE orders.user_id = users.id) AS total_pesanan, (SELECT COUNT(*) FROM orders WHERE orders.user_id = users.id AND status = \'disetujui\') AS total_disetujui FROM users WHERE role = \'pembeli\' ORDER BY full_name ASC').fetchall()
     return render_template('admin_buyers.html', buyers=buyers)
+
+@app.route('/admin/pembeli/<int:user_id>/ban', methods=['POST'])
+@admin_required
+def admin_ban_user(user_id):
+    db = get_db()
+    user = db.execute('SELECT id, full_name FROM users WHERE id = ? AND role = \'pembeli\'', (user_id,)).fetchone()
+    if user is None:
+        flash('Pembeli tidak ditemukan. / Buyer not found.', 'error')
+    else:
+        db.execute('UPDATE users SET is_banned = 1 WHERE id = ?', (user_id,))
+        db.commit()
+        flash(f'{user["full_name"]} telah diban permanen. / {user["full_name"]} has been permanently banned.', 'success')
+    return redirect(url_for('admin_buyers'))
+
+@app.route('/admin/pembeli/<int:user_id>/unban', methods=['POST'])
+@admin_required
+def admin_unban_user(user_id):
+    db = get_db()
+    user = db.execute('SELECT id, full_name FROM users WHERE id = ? AND role = \'pembeli\'', (user_id,)).fetchone()
+    if user is None:
+        flash('Pembeli tidak ditemukan. / Buyer not found.', 'error')
+    else:
+        db.execute('UPDATE users SET is_banned = 0 WHERE id = ?', (user_id,))
+        db.commit()
+        flash(f'{user["full_name"]} telah diaktifkan kembali. / {user["full_name"]} has been unbanned.', 'success')
+    return redirect(url_for('admin_buyers'))
 
 @app.errorhandler(403)
 def forbidden(e):
